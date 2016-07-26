@@ -68,3 +68,6 @@ target/
 # MkDocs
 site/
 
+# script created virtual environments
+deactivate/
+.env-*
