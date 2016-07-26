@@ -50,11 +50,11 @@ Options:
 										This option can be set multiple times.
   -a, --all-includes                    Songs must match all include filter criteria to be included.
   -A, --all-excludes                    Songs must match all exclude filter criteria to be excluded.
-  -p, --playlists						Output directory name for synced playlists.
+  -p, --playlists FOLDER				Output directory name for synced playlists.
 										Sync Playlists to local files (download)
-  -r, --removed 						Output directory name for removed files.
+  -r, --removed FOLDER					Output directory name for removed files.
 										Move local files removed from Google Music there (download).
-  --favorites 							Name of Favorites playlist when syncing playlists.
+  --favorites NAME						Name of Favorites playlist when syncing playlists.
 
 Patterns can be any valid Python regex patterns.
 """
@@ -271,11 +271,13 @@ def main():
 				removed_filepath = os.path.join(removed_dir, rel_file_path)
 				utils.make_sure_path_exists(os.path.dirname(removed_filepath), 0o700)
 				logger.info("Removing {0}".format(rel_file_path))
-				shutil.move(filepath, removed_filepath)
+				if not cli['dry-run']:
+					shutil.move(filepath, removed_filepath)
 
 			# clean up empty folders
 			logger.info(" ")
-			removeEmptyFolders(cli['input'][0], False)
+			if not cli['dry-run']:
+				removeEmptyFolders(cli['input'][0], False)
 
 		if cli['playlists']:
 			logger.info("Syncing playlists...")
@@ -331,9 +333,11 @@ def main():
 					with tempfile.NamedTemporaryFile(suffix='.m3u', delete=False) as temp:
 						temp.write(contentstr.encode('UTF-8-SIG'))
 					# move tempfile into place
+					utils.make_sure_path_exists(os.path.dirname(filename), 0o700)
 					shutil.move(temp.name, filename)
 
 				logger.log(QUIET, "Playlist ({0} tracks): {1}".format(len(songs), filename))
+				return filename
 
 
 			# get playlists with ordered lists of tracks
@@ -346,8 +350,10 @@ def main():
 			logger.info("\nFetching Playlist songs...")
 			download_missing_google_songs(playlist_tracks)
 			# create the m3u files for the playlists
+			created_playlists = [];
 			for playlist in playlists:
-				create_playlist_file(playlist['name'], playlist['tracks'], playlists_dir)
+				playlist_filename = create_playlist_file(playlist['name'], playlist['tracks'], playlists_dir)
+				created_playlists.append(playlist_filename)
 
 			# create an m3u file for all favorited songs
 			favorites_playlist_name = cli['favorites'] if 'favorites' in cli else '___auto_favorites___'
@@ -361,7 +367,29 @@ def main():
 			logger.info("\nFetching Favorited songs...")
 			download_missing_google_songs(thumbs_up_tracks)
 			# create favorites playlist
-			create_playlist_file(favorites_playlist_name, thumbs_up, playlists_dir)
+			created_playlist_filename = create_playlist_file(favorites_playlist_name, thumbs_up, playlists_dir)
+			created_playlists.append(created_playlist_filename)
+
+			if cli['removed']:
+				logger.info("Moving Removed playlists...")
+				# path to move songs removed from google music
+				removed_playlists_dir = os.path.join(os.path.abspath(cli['removed']), cli['playlists'])
+				# local playlists after sync
+				local_playlists = [os.path.join(dp, f) for dp, dn, fn in os.walk(playlists_dir) for f in fn]
+				playlists_to_remove = list(set(local_playlists) - set(created_playlists))
+
+				for filepath in playlists_to_remove:
+					rel_file_path = os.path.relpath(filepath, playlists_dir)
+					removed_filepath = os.path.join(removed_playlists_dir, rel_file_path)
+					utils.make_sure_path_exists(os.path.dirname(removed_filepath), 0o700)
+					logger.info("Removing {0}".format(rel_file_path))
+					if not cli['dry-run']:
+						shutil.move(filepath, removed_filepath)
+
+				# clean up empty folders
+				logger.info(" ")
+				if not cli['dry-run']:
+					removeEmptyFolders(playlists_dir, False)
 
 	else:
 		matched_google_songs, _ = mmw.get_google_songs()
