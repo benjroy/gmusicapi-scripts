@@ -11,6 +11,6 @@ which pip
 
 ./setup.py install
 
-gmsync down --log -p "./playlists" --removed "bizbaz" "./downloaded/%artist%/%album%/%track2% - %title%"
+gmsync down --log --favorites "__favorites1__" -p "./playlists" --removed "bizbaz" "./downloaded/%artist%/%album%/%track2% - %title%"
 
 deactivate

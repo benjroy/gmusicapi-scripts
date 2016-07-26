@@ -73,11 +73,8 @@ from gmusicapi_wrapper.utils import compare_song_collections, template_to_filepa
 import json
 from gmusicapi_wrapper import MobileClientWrapper
 from gmusicapi.utils import utils
-from gmusicapi.appdirs import my_appdirs
 from gmusicapi.clients import OAUTH_FILEPATH
 from functools import reduce
-
-import pprint
 
 
 QUIET = 25
@@ -209,29 +206,20 @@ def main():
 
 		cli['input'] = [template_to_base_path(cli['output'], matched_google_songs)]
 
-		matched_local_songs, __, __ = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
-
-		logger.info("\nFinding missing songs...")
-		songs_to_download = compare_song_collections(matched_google_songs, matched_local_songs)
-		songs_to_download.sort(key=lambda song: (song.get('artist'), song.get('album'), song.get('track_number')))
 
 		def download_songs(songs_to_download):
 			if cli['dry-run']:
 				logger.info("\nFound {0} song(s) to download".format(len(songs_to_download)))
-
 				if songs_to_download:
 					logger.info("\nSongs to download:\n")
-
 					for song in songs_to_download:
 						title = song.get('title', "<title>")
 						artist = song.get('artist', "<artist>")
 						album = song.get('album', "<album>")
 						song_id = song['id']
-
 						logger.log(QUIET, "{0} -- {1} -- {2} ({3})".format(title, artist, album, song_id))
 				else:
 					logger.info("\nNo songs to download")
-
 			else:
 				if songs_to_download:
 					logger.info("\nDownloading {0} song(s) from Google Music\n".format(len(songs_to_download)))
@@ -239,20 +227,22 @@ def main():
 				else:
 					logger.info("\nNo songs to download")
 
-		download_songs(songs_to_download)
+		def download_missing_google_songs(mmw_songs):
+			# recheck the local songs after any previous sync
+			matched_local_songs, __, __ = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
+			logger.info("\nFinding missing songs...")
+			songs_to_download = compare_song_collections(mmw_songs, matched_local_songs)
+			songs_to_download.sort(key=lambda song: (song.get('artist'), song.get('album'), song.get('track_number')))
+			return download_songs(songs_to_download)
+
+		logger.info("\nFetching Library songs...")
+		download_missing_google_songs(matched_google_songs)
+
 
 		if cli['playlists']:
 			logger.info("Syncing playlists...")
 			# get all songs from mobileClient api (to include ratings)
 			all_songs = mcw.api.get_all_songs()
-			# get playlists with ordered lists of tracks
-			playlists = mcw.api.get_all_user_playlist_contents()
-			# filter into favorites list
-			thumbs_up = [t for t in all_songs if int(t['rating']) > 3]
-			# most recent first			
-			thumbs_up.sort(key=lambda song: (int(song.get('lastModifiedTimestamp')) * -1))
-			# concatenate all the playlist tracks into a single list
-			playlist_tracks = reduce(lambda x, y: x + y, map(lambda x: x['tracks'], playlists)) + thumbs_up
 			# get id, prioritize trackId over id
 			def songid (track):
 				return track['trackId'] if 'trackId' in track else track['id']
@@ -261,28 +251,21 @@ def main():
 				id = songid(song)
 				songs[id] = song
 				return songs
-
+			# create lookup dicts for tracks (mmw) and songs (mcw)
 			songs_dict = reduce(songs_to_dict, all_songs, {})
+			tracks_dict = reduce(songs_to_dict, matched_google_songs + filtered_google_songs, {})
 
-			# map the playlist tracks to the more meta
-			# rich song entries and remove duplicates
-			playlist_songs = []
-			seen_songs = {}
-			for track in playlist_tracks:
-				id = songid(track)
-				if not id in seen_songs:
-					playlist_songs.append(songs_dict[id])
-					seen_songs[id] = True
-
-			# recheck the local songs after previous sync
-			matched_local_songs, __, __ = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
-			
-			logger.info("\nFinding missing playlist songs...")
-			songs_to_download = compare_song_collections(playlist_songs, matched_local_songs)
-			songs_to_download.sort(key=lambda song: (song.get('artist'), song.get('album'), song.get('track_number')))
-			
-			# download any missing playlist songs
-			download_songs(songs_to_download)
+			# returns music manager wrapper tracks for list of objects with song id or trackId
+			#  also removes duplicates
+			def get_mmw_tracks (songs):
+				tracks = []
+				seen = {}
+				for song in songs:
+					id = songid(song)
+					if id not in seen:
+						tracks.append(tracks_dict[id])
+						seen[id] = True
+				return tracks;
 
 			# path to save playlists
 			playlists_dir_path = os.path.abspath(cli['playlists'])
@@ -299,14 +282,10 @@ def main():
 						song = songs_dict[id]
 						artist = song['artist']
 						title = song['title']
-						duration = str(int(int(song['durationMillis']) / 1000))
-						# pp.pprint(song)
+						duration = str(int(int(song['durationMillis']) / 1000)) if 'durationMillis' in song else '0'
 						metadata = metadata_from_mobile_client_song(song)
 						songpath = template_to_filepath(cli['output'], metadata) + '.mp3'
-						logger.info(songpath)
-						# m3u.append(u'#EXTINF,' + duration + ',' + artist + ' - ' + title)
 						m3u.append(u'#EXTINF,' + duration + ',' + song['artist'] + ' - ' + song['title'])
-						# m3u.append(songpath)
 						m3u.append(os.path.relpath(songpath, outpath))
 					# write m3u file
 					contentstr = u'\n'.join(m3u)
@@ -318,12 +297,33 @@ def main():
 
 				logger.log(QUIET, "Playlist ({0} tracks): {1}".format(len(songs), filename))
 
+
+			# get playlists with ordered lists of tracks
+			playlists = mcw.api.get_all_user_playlist_contents()
+			# concatenate all the playlist tracks into a single list
+			playlist_tracks = reduce(lambda x, y: x + y, map(lambda x: x['tracks'], playlists)) if len(playlists) else []
+			# remove duplicates and get mmw tracks to download
+			playlist_tracks = get_mmw_tracks(playlist_tracks)
+			# download any missing songs
+			logger.info("\nFetching Playlist songs...")
+			download_missing_google_songs(playlist_tracks)
 			# create the m3u files for the playlists
 			for playlist in playlists:
 				create_playlist_file(playlist['name'], playlist['tracks'], playlists_dir_path)
 
+			# create an m3u file for all favorited songs
+			favorites_playlist_name = cli['favorites'] if 'favorites' in cli else '___auto_favorites___'
+			# filter mobile client songs into favorites list
+			thumbs_up = [t for t in all_songs if int(t['rating']) > 3]
+			# most recent first
+			thumbs_up.sort(key=lambda song: (int(song.get('lastModifiedTimestamp')) * -1))
+			# get music_manager_wrapper style tracks to compare
+			thumbs_up_tracks = get_mmw_tracks(thumbs_up)
+			# download any missing favorited songs
+			logger.info("\nFetching Favorited songs...")
+			download_missing_google_songs(thumbs_up_tracks)
 			# create favorites playlist
-			create_playlist_file('__favorites__', thumbs_up, playlists_dir_path)
+			create_playlist_file(favorites_playlist_name, thumbs_up, playlists_dir_path)
 
 	else:
 		matched_google_songs, _ = mmw.get_google_songs()
