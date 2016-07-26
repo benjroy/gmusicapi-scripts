@@ -181,8 +181,6 @@ def removeEmptyFolders(path, removeRoot=True):
 def main():
 	cli = dict((key.lstrip("-<").rstrip(">"), value) for key, value in docopt(__doc__).items())
 
-	pp.pprint(cli);
-
 	if cli['no-recursion']:
 		cli['max-depth'] = 0
 	else:
