@@ -39,7 +39,7 @@ setup(
 	],
 
 	install_requires=[
-		'gmusicapi-wrapper >= 0.5.0',
+		'gmusicapi-wrapper >= 0.5.1',
 		'docopt-unicode'
 	],
 
