@@ -17,44 +17,39 @@ Commands:
 
 Arguments:
   input                                 Files, directories, or glob patterns to upload.
-										Defaults to current directory.
+                                        Defaults to current directory.
   output                                Output file or directory name which can include a template pattern.
-										Defaults to name suggested by Google Music in your current directory.
+                                        Defaults to name suggested by Google Music in your current directory.
 
 Options:
   -h, --help                            Display help message.
   -c CRED, --cred CRED                  Specify oauth credential file name to use/create. [Default: oauth]
   -U ID --uploader-id ID                A unique id given as a MAC address (e.g. '00:11:22:33:AA:BB').
-										This should only be provided when the default does not work.
+                                        This should only be provided when the default does not work.
   -l, --log                             Enable gmusicapi logging.
   -m, --match                           Enable scan and match.
   -d, --dry-run                         Output list of songs that would be uploaded.
   -q, --quiet                           Don't output status messages.
-										With -l,--log will display gmusicapi warnings.
-										With -d,--dry-run will display song list.
+                                        With -l,--log will display gmusicapi warnings.
+                                        With -d,--dry-run will display song list.
   --delete-on-success                   Delete successfully uploaded local files.
   -R, --no-recursion                    Disable recursion when scanning for local files.
-										This is equivalent to setting --max-depth to 0.
+                                        This is equivalent to setting --max-depth to 0.
   --max-depth DEPTH                     Set maximum depth of recursion when scanning for local files.
-										Default is infinite recursion.
-										Has no effect when -R, --no-recursion set.
+                                        Default is infinite recursion.
+                                        Has no effect when -R, --no-recursion set.
   -e PATTERN, --exclude PATTERN         Exclude file paths matching pattern.
-										This option can be set multiple times.
+                                        This option can be set multiple times.
   -f FILTER, --include-filter FILTER    Include Google songs (download) or local songs (upload)
-										by field:pattern filter (e.g. "artist:Muse").
-										Songs can match any filter criteria.
-										This option can be set multiple times.
+                                        by field:pattern filter (e.g. "artist:Muse").
+                                        Songs can match any filter criteria.
+                                        This option can be set multiple times.
   -F FILTER, --exclude-filter FILTER    Exclude Google songs (download) or local songs (upload)
-										by field:pattern filter (e.g. "artist:Muse").
-										Songs can match any filter criteria.
-										This option can be set multiple times.
+                                        by field:pattern filter (e.g. "artist:Muse").
+                                        Songs can match any filter criteria.
+                                        This option can be set multiple times.
   -a, --all-includes                    Songs must match all include filter criteria to be included.
   -A, --all-excludes                    Songs must match all exclude filter criteria to be excluded.
-  -p, --playlists						Output directory name for synced playlists.
-										Sync Playlists to local files (download)
-  -r, --removed 						Output directory name for removed files.
-										Move local files removed from Google Music there (download).
-  --favorites 							Name of Favorites playlist when syncing playlists
 
 Patterns can be any valid Python regex patterns.
 """
@@ -62,23 +57,11 @@ Patterns can be any valid Python regex patterns.
 import logging
 import os
 import sys
-import shutil
-import tempfile
 
 from docopt import docopt
 
 from gmusicapi_wrapper import MusicManagerWrapper
 from gmusicapi_wrapper.utils import compare_song_collections, template_to_filepath
-
-import json
-from gmusicapi_wrapper import MobileClientWrapper
-from gmusicapi.utils import utils
-from gmusicapi.appdirs import my_appdirs
-from gmusicapi.clients import OAUTH_FILEPATH
-from functools import reduce
-
-import pprint
-
 
 QUIET = 25
 logging.addLevelName(25, "QUIET")
@@ -86,6 +69,7 @@ logging.addLevelName(25, "QUIET")
 logger = logging.getLogger('gmusicapi_wrapper')
 sh = logging.StreamHandler()
 logger.addHandler(sh)
+
 
 def template_to_base_path(template, google_songs):
 	"""Get base output path for a list of songs for download."""
@@ -98,71 +82,6 @@ def template_to_base_path(template, google_songs):
 		base_path = os.path.dirname(os.path.commonprefix(song_paths))
 
 	return base_path
-
-def metadata_from_mobile_client_song (song):
-	metadata = {}
-
-	if song['artist']: metadata['artist'] = song['artist']
-	if song['album']: metadata['album'] = song['album']
-	if song['title']: metadata['title'] = song['title']
-	if song['year']: metadata['date'] = song['year']
-	if song['albumArtist']: metadata['albumartist'] = song['albumArtist']
-
-	metadata['tracknumber'] = "{0}/{1}".format(song['trackNumber'], song['totalTrackCount'])
-	metadata['discnumber'] = "{0}/{1}".format(song['discNumber'], song['totalDiscCount'])
-
-	return metadata
-
-def login_mobile_client(mcw):
-	mcw.api.session._master_token = None
-	mcw.api.session._authtoken = None
-	mcw.api.android_id = None
-	mcw.api.session.is_authenticated = False
-
-	logger.info("Logging in to Mobile Client")
-
-	username = input("Enter your Google username or email address: ")
-	mcw.login(username=username)
-	creds = {
-		'masterToken': mcw.api.session._master_token,
-		'authToken': mcw.api.session._authtoken,
-		'email': username,
-		'androidId': mcw.api.android_id
-	}
-	return creds
-
-def login_mobile_client_from_cache(mcw, oauth_filename='oauth'):
-	# mcw is MobileClientWrapper
-	creds_filepath = os.path.join(os.path.dirname(OAUTH_FILEPATH), 'mc' + oauth_filename + '.cred')
-	# fetch credentials from file
-	try:
-		logger.info("Trying stored credentials to log in to Mobile Client")
-		with open(creds_filepath) as creds_file:
-			creds = json.load(creds_file)
-		logger.info(creds);
-		# fake login
-		mcw.api.session._master_token = creds['masterToken']
-		mcw.api.session._authtoken = creds['authToken']
-		mcw.api.android_id = creds['androidId']
-		# mcw.api.session._master_token = creds['masterToken'] + 'foo'
-		# mcw.api.session._authtoken = creds['authToken'] + 'foo'
-		# mcw.api.android_id = creds['androidId'] + 'foo'
-		mcw.api.session.is_authenticated = True
-		# test fake login with get_devices call
-	except:
-		logger.info("Unable to load credentials file...")
-
-	try:
-		devices = mcw.api.get_registered_devices()
-		# logger.info(devices);
-	except:
-		creds = login_mobile_client(mcw);
-
-	utils.make_sure_path_exists(os.path.dirname(creds_filepath), 0o700)
-	with open(creds_filepath, 'w') as outfile:
-		json.dump(creds, outfile)
-	
-	logger.info("Stored Mobile Client credentials")
 
 
 def main():
@@ -193,19 +112,13 @@ def main():
 	if not mmw.is_authenticated:
 		sys.exit()
 
-	mcw = MobileClientWrapper(enable_logging=cli['log'])
-
-	if cli['playlists']:
-		login_mobile_client_from_cache(mcw, oauth_filename=cli['cred'])
-
-		if not mcw.is_authenticated:
-			sys.exit()
-
 	if cli['down']:
-		matched_google_songs, filtered_google_songs = mmw.get_google_songs(
+		matched_google_songs, _ = mmw.get_google_songs(
 			include_filters=include_filters, exclude_filters=exclude_filters,
 			all_includes=cli['all-includes'], all_excludes=cli['all-excludes']
 		)
+
+		logger.info("")
 
 		cli['input'] = [template_to_base_path(cli['output'], matched_google_songs)]
 
@@ -213,118 +126,30 @@ def main():
 
 		logger.info("\nFinding missing songs...")
 		songs_to_download = compare_song_collections(matched_google_songs, matched_local_songs)
+
 		songs_to_download.sort(key=lambda song: (song.get('artist'), song.get('album'), song.get('track_number')))
 
-		def download_songs(songs_to_download):
-			if cli['dry-run']:
-				logger.info("\nFound {0} song(s) to download".format(len(songs_to_download)))
+		if cli['dry-run']:
+			logger.info("\nFound {0} song(s) to download".format(len(songs_to_download)))
 
-				if songs_to_download:
-					logger.info("\nSongs to download:\n")
+			if songs_to_download:
+				logger.info("\nSongs to download:\n")
 
-					for song in songs_to_download:
-						title = song.get('title', "<title>")
-						artist = song.get('artist', "<artist>")
-						album = song.get('album', "<album>")
-						song_id = song['id']
+				for song in songs_to_download:
+					title = song.get('title', "<title>")
+					artist = song.get('artist', "<artist>")
+					album = song.get('album', "<album>")
+					song_id = song['id']
 
-						logger.log(QUIET, "{0} -- {1} -- {2} ({3})".format(title, artist, album, song_id))
-				else:
-					logger.info("\nNo songs to download")
-
+					logger.log(QUIET, "{0} -- {1} -- {2} ({3})".format(title, artist, album, song_id))
 			else:
-				if songs_to_download:
-					logger.info("\nDownloading {0} song(s) from Google Music\n".format(len(songs_to_download)))
-					mmw.download(songs_to_download, template=cli['output'])
-				else:
-					logger.info("\nNo songs to download")
-
-		download_songs(songs_to_download)
-
-		if cli['playlists']:
-			logger.info("Syncing playlists...")
-			# get all songs from mobileClient api (to include ratings)
-			all_songs = mcw.api.get_all_songs()
-			# get playlists with ordered lists of tracks
-			playlists = mcw.api.get_all_user_playlist_contents()
-			# filter into favorites list
-			thumbs_up = [t for t in all_songs if int(t['rating']) > 3]
-			# most recent first			
-			thumbs_up.sort(key=lambda song: (int(song.get('lastModifiedTimestamp')) * -1))
-			# concatenate all the playlist tracks into a single list
-			playlist_tracks = reduce(lambda x, y: x + y, map(lambda x: x['tracks'], playlists)) + thumbs_up
-			# get id, prioritize trackId over id
-			def songid (track):
-				return track['trackId'] if 'trackId' in track else track['id']
-			# create a dictionary of all fetched google songs, indexed by id
-			def songs_to_dict (songs, song):
-				id = songid(song)
-				songs[id] = song
-				return songs
-
-			songs_dict = reduce(songs_to_dict, all_songs, {})
-
-			# map the playlist tracks to the more meta
-			# rich song entries and remove duplicates
-			playlist_songs = []
-			seen_songs = {}
-			for track in playlist_tracks:
-				id = songid(track)
-				if not id in seen_songs:
-					playlist_songs.append(songs_dict[id])
-					seen_songs[id] = True
-
-			# recheck the local songs after previous sync
-			matched_local_songs, __, __ = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
-			
-			logger.info("\nFinding missing playlist songs...")
-			songs_to_download = compare_song_collections(playlist_songs, matched_local_songs)
-			songs_to_download.sort(key=lambda song: (song.get('artist'), song.get('album'), song.get('track_number')))
-			
-			# download any missing playlist songs
-			download_songs(songs_to_download)
-
-			# path to save playlists
-			playlists_dir_path = os.path.abspath(cli['playlists'])
-			# ensure directory is there
-			utils.make_sure_path_exists(playlists_dir_path, 0o700)
-
-			def create_playlist_file (name, songs, outpath):
-				filename = os.path.join(outpath, name + '.m3u')
-
-				if not cli['dry-run']:
-					m3u = [u'#EXTM3U']
-					for track in songs:
-						id = songid(track)
-						song = songs_dict[id]
-						artist = song['artist']
-						title = song['title']
-						duration = str(int(int(song['durationMillis']) / 1000))
-						# pp.pprint(song)
-						metadata = metadata_from_mobile_client_song(song)
-						songpath = template_to_filepath(cli['output'], metadata) + '.mp3'
-						logger.info(songpath)
-						# m3u.append(u'#EXTINF,' + duration + ',' + artist + ' - ' + title)
-						m3u.append(u'#EXTINF,' + duration + ',' + song['artist'] + ' - ' + song['title'])
-						# m3u.append(songpath)
-						m3u.append(os.path.relpath(songpath, outpath))
-					# write m3u file
-					contentstr = u'\n'.join(m3u)
-					# write to temp file
-					with tempfile.NamedTemporaryFile(suffix='.m3u', delete=False) as temp:
-						temp.write(contentstr.encode('UTF-8-SIG'))
-					# move tempfile into place
-					shutil.move(temp.name, filename)
-
-				logger.log(QUIET, "Playlist ({0} tracks): {1}".format(len(songs), filename))
-
-			# create the m3u files for the playlists
-			for playlist in playlists:
-				create_playlist_file(playlist['name'], playlist['tracks'], playlists_dir_path)
-
-			# create favorites playlist
-			create_playlist_file('__favorites__', thumbs_up, playlists_dir_path)
-
+				logger.info("\nNo songs to download")
+		else:
+			if songs_to_download:
+				logger.info("\nDownloading {0} song(s) from Google Music\n".format(len(songs_to_download)))
+				mmw.download(songs_to_download, template=cli['output'])
+			else:
+				logger.info("\nNo songs to download")
 	else:
 		matched_google_songs, _ = mmw.get_google_songs()
 
@@ -387,7 +212,6 @@ def main():
 							logger.warning("Failed to remove {} after successful upload".format(song))
 
 	mmw.logout()
-	mcw.logout()
 	logger.info("\nAll done!")
 
 
