@@ -54,7 +54,7 @@ Options:
 										Sync Playlists to local files (download)
   -r, --removed 						Output directory name for removed files.
 										Move local files removed from Google Music there (download).
-  --favorites 							Name of Favorites playlist when syncing playlists
+  --favorites 							Name of Favorites playlist when syncing playlists.
 
 Patterns can be any valid Python regex patterns.
 """
@@ -64,14 +64,14 @@ import os
 import sys
 import shutil
 import tempfile
+import json
 
 from docopt import docopt
 
 from gmusicapi_wrapper import MusicManagerWrapper
+from gmusicapi_wrapper import MobileClientWrapper
 from gmusicapi_wrapper.utils import compare_song_collections, template_to_filepath
 
-import json
-from gmusicapi_wrapper import MobileClientWrapper
 from gmusicapi.utils import utils
 from gmusicapi.clients import OAUTH_FILEPATH
 from functools import reduce
@@ -141,15 +141,12 @@ def login_mobile_client_from_cache(mcw, oauth_filename='oauth'):
 		mcw.api.session._master_token = creds['masterToken']
 		mcw.api.session._authtoken = creds['authToken']
 		mcw.api.android_id = creds['androidId']
-		# mcw.api.session._master_token = creds['masterToken'] + 'foo'
-		# mcw.api.session._authtoken = creds['authToken'] + 'foo'
-		# mcw.api.android_id = creds['androidId'] + 'foo'
 		mcw.api.session.is_authenticated = True
-		# test fake login with get_devices call
 	except:
 		logger.info("Unable to load credentials file...")
 
 	try:
+		# test fake login with get_devices call
 		devices = mcw.api.get_registered_devices()
 		# logger.info(devices);
 	except:
@@ -161,9 +158,30 @@ def login_mobile_client_from_cache(mcw, oauth_filename='oauth'):
 	
 	logger.info("Stored Mobile Client credentials")
 
+def removeEmptyFolders(path, removeRoot=True):
+	"""Function to remove empty folders inside"""
+	if not os.path.isdir(path):
+		return
+
+	# remove empty subfolders
+	files = os.listdir(path)
+	if len(files):
+		for f in files:
+			fullpath = os.path.join(path, f)
+			if os.path.isdir(fullpath):
+				removeEmptyFolders(fullpath)
+
+	# if folder empty, delete it
+	files = os.listdir(path)
+	if len(files) == 0 and removeRoot:
+		print("Removing empty folder: {0}".format(path))
+		os.rmdir(path)
+
 
 def main():
 	cli = dict((key.lstrip("-<").rstrip(">"), value) for key, value in docopt(__doc__).items())
+
+	pp.pprint(cli);
 
 	if cli['no-recursion']:
 		cli['max-depth'] = 0
@@ -238,6 +256,28 @@ def main():
 		logger.info("\nFetching Library songs...")
 		download_missing_google_songs(matched_google_songs)
 
+		if cli['removed']:
+			logger.info("Moving Removed songs...")
+			# path to move songs removed from google music
+			removed_dir = os.path.abspath(cli['removed'])
+			# ensure directory is there
+			utils.make_sure_path_exists(removed_dir, 0o700)
+			# local songs after sync
+			matched_local_songs, filtered_local_songs, excluded_local_songs = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
+			all_local_songs = matched_local_songs + filtered_local_songs + excluded_local_songs
+			all_google_songs = matched_google_songs + filtered_google_songs
+			songs_to_move = compare_song_collections(all_local_songs, all_google_songs)
+
+			for filepath in songs_to_move:
+				rel_file_path = os.path.relpath(filepath, cli['input'][0])
+				removed_filepath = os.path.join(removed_dir, rel_file_path)
+				utils.make_sure_path_exists(os.path.dirname(removed_filepath), 0o700)
+				logger.info("Removing {0}".format(rel_file_path))
+				shutil.move(filepath, removed_filepath)
+
+			# clean up empty folders
+			logger.info(" ")
+			removeEmptyFolders(cli['input'][0], False)
 
 		if cli['playlists']:
 			logger.info("Syncing playlists...")
@@ -268,9 +308,9 @@ def main():
 				return tracks;
 
 			# path to save playlists
-			playlists_dir_path = os.path.abspath(cli['playlists'])
+			playlists_dir = os.path.abspath(cli['playlists'])
 			# ensure directory is there
-			utils.make_sure_path_exists(playlists_dir_path, 0o700)
+			utils.make_sure_path_exists(playlists_dir, 0o700)
 
 			def create_playlist_file (name, songs, outpath):
 				filename = os.path.join(outpath, name + '.m3u')
@@ -309,7 +349,7 @@ def main():
 			download_missing_google_songs(playlist_tracks)
 			# create the m3u files for the playlists
 			for playlist in playlists:
-				create_playlist_file(playlist['name'], playlist['tracks'], playlists_dir_path)
+				create_playlist_file(playlist['name'], playlist['tracks'], playlists_dir)
 
 			# create an m3u file for all favorited songs
 			favorites_playlist_name = cli['favorites'] if 'favorites' in cli else '___auto_favorites___'
@@ -323,7 +363,7 @@ def main():
 			logger.info("\nFetching Favorited songs...")
 			download_missing_google_songs(thumbs_up_tracks)
 			# create favorites playlist
-			create_playlist_file(favorites_playlist_name, thumbs_up, playlists_dir_path)
+			create_playlist_file(favorites_playlist_name, thumbs_up, playlists_dir)
 
 	else:
 		matched_google_songs, _ = mmw.get_google_songs()
