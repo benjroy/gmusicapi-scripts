@@ -76,7 +76,6 @@ from gmusicapi.utils import utils
 from gmusicapi.clients import OAUTH_FILEPATH
 from functools import reduce
 
-
 QUIET = 25
 logging.addLevelName(25, "QUIET")
 
@@ -222,62 +221,53 @@ def main():
 
 		cli['input'] = [template_to_base_path(cli['output'], matched_google_songs)]
 
+		matched_local_songs, filtered_local_songs, excluded_local_songs = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
+
+		# keep track of all local songs
+		all_local_songs_dict = dict()
+
+		def add_to_local_songs (filepath):
+			all_local_songs_dict[os.path.abspath(filepath)] = True
+
+		def all_local_songs ():
+			return list(all_local_songs_dict.keys())
+
+		for filepath in matched_local_songs + filtered_local_songs + excluded_local_songs:
+			add_to_local_songs(filepath)
+
 
 		def download_songs(songs_to_download):
-			if cli['dry-run']:
-				logger.info("\nFound {0} song(s) to download".format(len(songs_to_download)))
-				if songs_to_download:
-					logger.info("\nSongs to download:\n")
+			if songs_to_download:
+				if cli['dry-run']:
+					logger.info("\nFound {0} song(s) to download".format(len(songs_to_download)))
 					for song in songs_to_download:
 						title = song.get('title', "<title>")
 						artist = song.get('artist', "<artist>")
 						album = song.get('album', "<album>")
 						song_id = song['id']
+						metadata = metadata_from_mobile_client_song(song)
+						songpath = template_to_filepath(cli['output'], metadata) + '.mp3'
 						logger.log(QUIET, "{0} -- {1} -- {2} ({3})".format(title, artist, album, song_id))
+						add_to_local_songs(songpath)
 				else:
-					logger.info("\nNo songs to download")
-			else:
-				if songs_to_download:
 					logger.info("\nDownloading {0} song(s) from Google Music\n".format(len(songs_to_download)))
-					mmw.download(songs_to_download, template=cli['output'])
-				else:
-					logger.info("\nNo songs to download")
+					results = mmw.download(songs_to_download, template=cli['output'])
+					# keep track of new filepaths
+					for res in results:
+						if res['result'] == 'downloaded':
+							add_to_local_songs(res['filepath'])
+			else:
+				logger.info("\nNo songs to download")
 
 		def download_missing_google_songs(mmw_songs):
 			# recheck the local songs after any previous sync
-			matched_local_songs, __, __ = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
 			logger.info("\nFinding missing songs...")
-			songs_to_download = compare_song_collections(mmw_songs, matched_local_songs)
+			songs_to_download = compare_song_collections(mmw_songs, all_local_songs())
 			songs_to_download.sort(key=lambda song: (song.get('artist'), song.get('album'), song.get('track_number')))
 			return download_songs(songs_to_download)
 
 		logger.info("\nFetching Library songs...")
 		download_missing_google_songs(matched_google_songs)
-
-		if cli['removed']:
-			logger.info("Moving Removed songs...")
-			# path to move songs removed from google music
-			removed_dir = os.path.abspath(cli['removed'])
-			# ensure directory is there
-			utils.make_sure_path_exists(removed_dir, 0o700)
-			# local songs after sync
-			matched_local_songs, filtered_local_songs, excluded_local_songs = mmw.get_local_songs(cli['input'], exclude_patterns=cli['exclude'])
-			all_local_songs = matched_local_songs + filtered_local_songs + excluded_local_songs
-			all_google_songs = matched_google_songs + filtered_google_songs
-			songs_to_move = compare_song_collections(all_local_songs, all_google_songs)
-
-			for filepath in songs_to_move:
-				rel_file_path = os.path.relpath(filepath, cli['input'][0])
-				removed_filepath = os.path.join(removed_dir, rel_file_path)
-				utils.make_sure_path_exists(os.path.dirname(removed_filepath), 0o700)
-				logger.info("Removing {0}".format(rel_file_path))
-				if not cli['dry-run']:
-					shutil.move(filepath, removed_filepath)
-
-			# clean up empty folders
-			logger.info(" ")
-			if not cli['dry-run']:
-				removeEmptyFolders(cli['input'][0], False)
 
 		if cli['playlists']:
 			logger.info("Syncing playlists...")
@@ -327,6 +317,8 @@ def main():
 						songpath = template_to_filepath(cli['output'], metadata) + '.mp3'
 						m3u.append(u'#EXTINF,' + duration + ',' + song['artist'] + ' - ' + song['title'])
 						m3u.append(os.path.relpath(songpath, outpath))
+						# track this song as a local song to keep
+						add_to_local_songs(songpath)
 					# write m3u file
 					contentstr = u'\n'.join(m3u)
 					# write to temp file
@@ -370,7 +362,31 @@ def main():
 			created_playlist_filename = create_playlist_file(favorites_playlist_name, thumbs_up, playlists_dir)
 			created_playlists.append(created_playlist_filename)
 
-			if cli['removed']:
+
+		if cli['removed']:
+			logger.info("Moving Removed songs...")
+			# path to move songs removed from google music
+			removed_dir = os.path.abspath(cli['removed'])
+			# ensure directory is there
+			utils.make_sure_path_exists(removed_dir, 0o700)
+			# local songs after sync
+			all_google_songs = matched_google_songs + filtered_google_songs
+			songs_to_move = compare_song_collections(all_local_songs(), all_google_songs)
+
+			for filepath in songs_to_move:
+				rel_file_path = os.path.relpath(filepath, cli['input'][0])
+				removed_filepath = os.path.join(removed_dir, rel_file_path)
+				utils.make_sure_path_exists(os.path.dirname(removed_filepath), 0o700)
+				logger.info("Removing {0} ~> {1}".format(filepath, removed_filepath))
+				if not cli['dry-run']:
+					shutil.move(filepath, removed_filepath)
+
+			# clean up empty folders
+			logger.info(" ")
+			if not cli['dry-run']:
+				removeEmptyFolders(cli['input'][0], False)
+
+			if cli['playlists']:
 				logger.info("Moving Removed playlists...")
 				# path to move songs removed from google music
 				removed_playlists_dir = os.path.join(os.path.abspath(cli['removed']), cli['playlists'])
