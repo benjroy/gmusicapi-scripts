@@ -76,6 +76,9 @@ from gmusicapi.utils import utils
 from gmusicapi.clients import OAUTH_FILEPATH
 from functools import reduce
 
+from gmusicapi_wrapper.utils import _get_mutagen_metadata
+
+
 QUIET = 25
 logging.addLevelName(25, "QUIET")
 
@@ -233,7 +236,19 @@ def main():
 			return list(all_local_songs_dict.keys())
 
 		for filepath in matched_local_songs + filtered_local_songs + excluded_local_songs:
-			add_to_local_songs(filepath)
+			metadata = _get_mutagen_metadata(filepath);
+			songpath = template_to_filepath(cli['output'], metadata) + '.mp3'
+			if filepath != songpath:
+				utils.make_sure_path_exists(os.path.dirname(songpath), 0o700)
+				print("{0} ~> {1}".format(filepath, songpath))
+				shutil.move(filepath, songpath)
+
+			add_to_local_songs(songpath)
+			# add_to_local_songs(filepath)
+
+
+		# for filepath in matched_local_songs + filtered_local_songs + excluded_local_songs:
+		# 	add_to_local_songs(filepath)
 
 
 		def download_songs(songs_to_download):
